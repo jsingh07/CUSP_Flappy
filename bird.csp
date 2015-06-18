@@ -1,0 +1,483 @@
+.EQU KBD_CNTL, $000 
+.EQU KBD_STAT, $000 
+.EQU KBD_DATA, $001 
+.EQU KBD_FLUSH, $40 ; Note that this disables the keyboard interrupt 
+;.EQU KBD_INT_VECTOR, $FF8 
+.EQU TIM_CNTL, $030 
+.EQU TIM_STAT, $030 
+.EQU TIM_RELOAD_VALUE, $031 
+.EQU TIM_COUNT, $034 
+;.EQU TIM_INT_VECTOR, $FFB 
+.EQU INTERRUPT_ENA, $80 
+.EQU RESET_READY_BIT, $40 
+.EQU START_AFTER_LOAD, $10 
+.EQU ENABLE_RESET_AND_START, $D0 
+.EQU ENABLE_AND_RESET, $C0 
+ 
+.EQU CRT_VBUFF, $100
+.EQU BOTTOM_RIGHT, $313 
+.EQU CRT_XREG, $314 
+.EQU CRT_YREG, $315 
+.EQU CRT_CNTL, $316 
+.EQU CRT_DATA, $317 
+.EQU CRT_ROWS, 14 
+.EQU CRT_COLS, 38 
+.EQU CLEAR_DISPLAY, $01 
+.EQU HOME, $04 
+.EQU PUT_NUM, $E00 ; MINI_OS JSRS 
+.EQU GET_NUM, $E01 
+.EQU GET_STR, $E04 
+.EQU PUT_STR, $E05 
+.EQU PUT_NL, $E06 
+.EQU PUT_NUM2, $E07 
+.EQU PUT_CHR, $E08 
+.EQU TOP, 0 
+.EQU BOTTOM, 13 
+.EQU LEFT, 0 
+.EQU RIGHT, 37 
+.EQU UP, 0 
+.EQU DOWN, 1 
+.EQU ESC, 27 
+.EQU UP_ARROW, 'H' 
+.EQU L_ARROW, 'K'
+.EQU R_ARROW, 'M'
+.EQU PASSAGE_HEIGHT, 5 
+.EQU BIRD_COLUMN, 3 
+.EQU BIRD, '>' 
+.EQU DEAD_BIRD, '^'
+.EQU QUIT, 'x' 
+.EQU START, 13 ; Enter key 
+.EQU NOKEY, 'n' 
+.EQU PLAY_DELAY, 700; # of timer iterations before pipe moves, around seven times a second.
+enable:	.word 1
+main: 	lds# $e00
+	cie
+
+
+	lda# 45
+	sta seed
+
+	jsr showIntro
+	lda# KeyISR
+	sta $FF8
+	lda# TimerISR
+	sta $FFB
+	
+	psh# max
+	psh# birdPOS
+	psh# seed
+	psh# pipex
+	psh# pipey
+	jsr startGame
+	ads# 5
+	
+	
+	lda# PLAY_DELAY	;so after 700 cycles there will be an interrupt TIMER ISR at line 201
+	outw TIM_RELOAD_VALUE
+	
+	lda# ENABLE_RESET_AND_START	;enable timer isr
+	outb TIM_CNTL
+
+	lda# INTERRUPT_ENA
+	outb KBD_CNTL
+	
+	sie
+
+	
+main2:	nop
+	jmp main2
+	
+KeyISR:	bgn# 0
+	psha
+	pshx
+	
+PASS:	inb KBD_DATA 	;check for esc
+	cma# $1B
+	jne KeyISR4
+	inb KBD_DATA	; if esc check for up
+	cma# UP_ARROW
+	jeq KeyISR1	; if (key == UP) 
+	cma# L_ARROW
+	jeq KeyISR1	; if(key == left)
+	cma# R_ARROW	; if(key == right)
+	jeq KEYISR1
+KeyISR1:	psha
+	psh# birdPOS
+	jsr moveBird
+	ads#2
+	jmp KeyISR9
+KeyISR4:	cma# QUIT	; else not escaped
+	jne KeyISR9	; if (key == QUIT) )
+	hlt	; x was pressed
+KeyISR9:	popx
+	popa
+	fin# 0
+	irtn
+
+;MOVE BIRD
+	.equ direction, 3
+	.equ moveBird_birdPOS, 2
+	
+moveBird:	bgn# 0
+	psha
+	pshx
+	
+	ldx* !moveBird_birdPOS	;clear last postin of bird
+	lda# ' '
+	outb+ CRT_VBUFF
+	
+	lda !direction
+	cma# UP_ARROW
+	jeq  move_up
+	cma# L_ARROW
+	jeq  move_left
+	cma# R_ARROW
+	jeq move_right
+
+move_left:	ldx* !moveBird_birdPOS	;subtract 1 to move left 
+	sbx# 1
+	stx* !moveBird_birdPOS
+	lda# birdCOL	;track bird column
+	SBA# 1
+	sta birdCOL
+	jmp print_bird
+
+move_right:	ldx* !moveBird_birdPOS   ; add 1 to move right
+	adx# 1
+	stx* !moveBird_birdPOS
+	lda# birdCOL
+	ADA# 1
+	sta birdCOL
+	jmp print_bird
+
+move_up:	ldx* !moveBird_birdPOS	;load up and print new postition of bird
+	sbx# 76	; subtract 76 to move bird by 1
+	stx* !moveBird_birdPOS	; store new position
+	lda# birdROW
+	SBA# 76
+	sta birdCOL
+print_bird:    lda# bird
+	outb+ CRT_VBUFF
+
+	popx
+	popa
+	fin# 0
+	rtn
+
+;START GAME
+	.equ startGame_max, 6
+	.equ startGame_birdPOS, 5
+	.equ startGame_seed, 4
+	.equ startGame_pipex, 3
+	.equ startGame_pipey, 2
+	
+
+startGame:	bgn# 0
+	psha
+	pshx
+	lda# CLEAR_DISPLAY ;clear display
+	outb CRT_CNTL
+	ldx# 0
+randomfill:	stx sI
+	psh ! startGame_max	;get random number
+	psh ! startGame_seed
+	jsr random2
+	ads# 2
+	ada# 7
+	sta& !startGame_pipey
+	lda# 9
+	mul sI
+	ada# 52
+	sta& !startGame_pipex	;fill in the columns 
+	adx# 1
+	cmx# 4
+	jlt randomfill
+	
+ 	ldx# (6 * 38)+ 3	;position bird stor the position and print bird
+	stx* !startGame_birdPOS
+	lda# BIRD
+	outb+ CRT_VBUFF
+
+PASS1:	inb KBD_DATA 	;check for esc
+	cma# $1B
+	jne pass1
+	inb KBD_DATA	; if esc check for up
+	cma# UP_ARROW
+	jne pass1
+
+	popx
+	popa
+	fin# 0
+	rtn
+sI:	.word 0
+stemp:	.word 0
+;DROP BIRD
+	.equ drop_birdPOS, 2
+
+dropBird:	bgn# 0		;gravity drops the bird
+	psha
+	pshx
+	
+	ldx* !drop_birdPOS	;load up and clear current bird position
+	lda# ' '
+	outb+ CRT_VBUFF
+	adx# 38	;add 38 to drop one row 
+	stx* !drop_birdPOS	;store the new position of bird
+	lda# bird
+	outb+ CRT_VBUFF
+	lda# birdROW	;keep track of birds row
+	ADA# 38
+	sta birdCOL
+
+	popx
+	popa
+	fin#0
+	rtn
+
+;IGNORE ALL THE CODE IN THE GREY IT DOESNT HOLD ANY MEANING TELL WE START MOVEWORLD OR LIVES
+TimerISR:	bgn# 0
+	psha
+	pshx	
+  
+
+	psh# birdPOS
+	psh# seed
+	psh# pipex
+	psh# pipey
+	;psh# lives
+	jsr moveWorld	;moveWorld(&copterHeight, &distance, &seed, wallHeights, &lives, &currentDelayLimit);
+	ads# 4
+
+	jmp TimerISR9
+	
+TimerISR9:	lda# ENABLE_RESET_AND_START
+	outb TIM_CNTL
+	popx
+	popa
+	fin# 0
+	irtn
+
+
+
+
+
+;RANDOM GENERATOR 
+
+randword1:	.word 32719
+randword2:	.word 32749
+	.equ random2_max, 3
+	.equ random2_seed, 2
+
+random2:	bgn# 0
+	lda* !random2_seed
+	mul randword1		; *seed *= 32719
+	ada# 3		; *seed += 3
+	mod randword2		; *seed %= 32749
+	sta* !random2_seed
+	inc  max	
+	mod  max	; return seed % (rand2_max + 1)
+cont_random:	fin# 0
+	rtn
+
+;MOVE WORLD
+	.equ move_birdPOS, 5
+	.equ move_seed, 4
+	.equ move_pipex, 3
+	.equ move_pipey, 2
+
+moveWorld:	bgn# 0
+	psha
+	pshx
+
+	lda# CLEAR_DISPLAY ;clear display
+	outb CRT_CNTL
+
+	psh# birdPos	;call to dorp bird 
+	jsr dropBird
+	ads# 1
+
+	psh !move_pipex
+	psh !move_pipey
+	psh !move_seed
+	jsr writePipe
+	ads# 3
+
+
+	popx
+	popa	
+	fin# 0
+	rtn
+
+
+;WRITE PIPES
+	.equ write_pipePOSX, 4
+	.equ write_pipePOSY, 3
+	.equ write_seed, 2
+
+writePipe:	bgn# 0
+	psha
+	pshx
+	ldx# 0
+	stx I
+for1:	cmx# 4
+	jge stop	
+	lda& !write_pipePOSX
+	sba# 1
+	sta& !write_pipePOSX
+	cma# 0		
+	jgt  if1	;jump to if pipePOSX < 36
+	psh# max
+	psh# seed
+	jsr random2
+	ads# 2
+	ada# 7
+	sta& !write_pipePOSY
+	lda# 37
+	sta& !write_pipePOSX
+if1:	lda& !write_pipePOSX	;if(pipPOSX[i] <36)
+	cma# 36
+	jge endfor
+	lda& !write_pipePOSY
+	sba# PASSAGE_HEIGHT
+	sta Y
+	;ldx I
+	mul# 38
+	ada& !write_pipePOSX
+	sta temp
+	ldx temp
+	lda PIPE_BOTTOM
+	outw+ CRT_VBUFF
+	lda Y
+printside1:	sba# 1
+	sta Y
+	cma# 0		;print the sides for top pipe
+	jlt contwrite
+	;sta temp
+	;lda temp
+	mul# 38
+	ldx I
+	ada& !write_pipePOSX
+	sta temp
+	ldx temp
+	lda PIPE_SIDE
+	outw+ CRT_VBUFF
+	;ldx I
+	lda Y
+	;sba& !write_pipePOSX
+	jmp printside1
+contwrite:	ldx I		;print pipe_top for bottom pipe
+	lda& !write_pipePOSY
+	mul# 38
+	ada& !write_pipePOSX
+	sta temp
+	ldx temp
+	lda PIPE_TOP
+	outw+ CRT_VBUFF
+	ldx I
+	lda& !write_pipePOSY
+printside2:	ada# 1
+	sta Y
+	cma# BOTTOM
+	jgt endfor
+	ldx I
+	mul# 38
+	ada& !write_pipePOSX
+	sta temp
+	ldx temp
+	lda PIPE_SIDE
+	outw+ CRT_VBUFF
+	lda Y
+	;sba& !write_pipePOSX
+	jmp printside2
+endfor:	ldx I
+	adx# 1
+	stx I
+	jmp for1
+stop:	popx
+	popa
+	fin# 0
+	rtn
+
+I:	.blkw 1,0
+Y:	.blkw 1,0
+temp:	.blkw 1,0
+
+;SHOW INTRO
+showIntro:	bgn# 0
+	psha
+	lda# CLEAR_DISPLAY
+	outb CRT_CNTL
+	psh# IntroStr1Len
+	psh# IntroStr1
+	jsr put_str
+	ads#  2
+	psh# IntroStr2Len
+	psh# IntroStr2
+	jsr put_str
+	ads#  2
+	psh# IntroStr3Len
+	psh# IntroStr3
+	jsr put_str
+	ads#  2
+	psh# IntroStr4Len
+	psh# IntroStr4
+	jsr put_str
+	ads#  2
+	psh# IntroStr5Len
+	psh# IntroStr5
+	jsr put_str
+	ads#  2
+	psh# IntroStr6Len
+	psh# IntroStr6
+	jsr put_str
+	ads#  2
+	psh# IntroStr7Len
+	psh# IntroStr7
+	jsr put_str
+	ads#  2
+	psh# IntroStr8Len
+	psh# IntroStr8
+	jsr put_str
+	ads#  2
+	psh# IntroStr9Len
+	psh# IntroStr9
+	jsr put_str
+	ads#  2
+	lda# KBD_FLUSH
+	outb KBD_CNTL
+showIntro1:	inb KBD_STAT	; some data in keyboard?
+	jge showIntro1
+	inb KBD_DATA
+	cma# START
+	jne showIntro1
+	popa
+	fin# 0
+	rtn	
+
+
+size:	.word 4
+pipex:	.blkw 4,0
+pipey:	.blkw 4,0
+birdROW:	.word 228	;starting row and col
+birdCOL:	.word 3
+max:	.word 5
+birdPOS: 	.word 1
+lives:	.word 1
+score:	.word 0
+delay:	.word 1
+seed:	.word 45
+timerCount:	.word 0   ; counts how many times timerReloadValue has been reached
+currentDelayLimit: .word 5;  // when timerCount reaches this, the program moves on.
+
+PIPE_BOTTOM:	.word '|_|'
+PIPE_SIDE:	.word '| |'
+PIPE_TOP:	.word '|-|' 
+IntroStr1:	.char '      Flappy Bird Introduction\CR\LF', IntroStr1Len
+IntroStr2:  	.char 'This is the minimal version of\CR\LF', IntroStr2Len
+IntroStr3: 	.char 'flappy bird. The game starts when the\CR\LF', IntroStr3Len
+IntroStr4:  	.char 'enter key is pressed.  The game\CR\LF', IntroStr4Len
+IntroStr5:  	.char 'ends when either the user presses x\CR\LF', IntroStr5Len
+IntroStr6:  	.char 'or their lives reaches zero\CR\LF', IntroStr6Len
+IntroStr7:  	.char 'Instead of this introduction,\CR\LF', IntroStr7Len
+IntroStr8:  	.char 'students should place a description\CR\LF', IntroStr8Len
+IntroStr9:  	.char 'of their options here.\CR\LF', IntroStr9Len
